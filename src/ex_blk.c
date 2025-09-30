@@ -32,33 +32,35 @@ static int dev_major = 0;
 static struct blk_mq_ops ex_blk_mq_ops;
 static struct block_device_operations ex_blk_fops;
 
-static int ex_blk_handle_request(struct request *rq, unsigned int *bytes_done)
+static int ex_blk_handle_request(struct request *rq)
 {
 	struct ex_blk_dev *dev = rq->q->queuedata;
-	loff_t pos = blk_rq_pos(rq) << 9;
-	loff_t dev_size = (loff_t)(dev->capacity << SECTOR_SHIFT);
+	sector_t pos = blk_rq_pos(rq);
+	sector_t dev_sectors = dev->capacity;
 	struct bio_vec bvec;
 	struct req_iterator iter;
 	int dir = rq_data_dir(rq);
+	sector_t sector_count;
 	size_t len;
 	void *buf;
 
-	if (pos >= dev_size)
+	if (pos >= dev_sectors)
 		return -EIO;
 
 	rq_for_each_segment(bvec, rq, iter) {
-		len = bvec.bv_len;
-		buf = page_address(bvec.bv_page) + bvec.bv_offset;
-		if (pos + len > dev_size)
-			len = dev_size - pos;
-		if (len == 0)
+		sector_count = bvec.bv_len >> SECTOR_SHIFT;
+		if (pos + sector_count > dev_sectors)
+			sector_count = dev_sectors - pos;
+		if (sector_count == 0)
 			break;
+
+		len = sector_count << SECTOR_SHIFT;
+		buf = page_address(bvec.bv_page) + bvec.bv_offset;
 		if (dir == WRITE)
-			memcpy(dev->data + pos, buf, len);
+			memcpy(dev->data + (pos << SECTOR_SHIFT), buf, len);
 		else
-			memcpy(buf, dev->data + pos, len);
-		pos += len;
-		*bytes_done += len;
+			memcpy(buf, dev->data + (pos << SECTOR_SHIFT), len);
+		pos = pos + sector_count;
 	}
 	return 0;
 }
@@ -66,16 +68,18 @@ static int ex_blk_handle_request(struct request *rq, unsigned int *bytes_done)
 static blk_status_t ex_blk_queue_rq(struct blk_mq_hw_ctx *hctx,
 				    const struct blk_mq_queue_data *bd)
 {
-	unsigned int nr_bytes = 0;
-	blk_status_t status = BLK_STS_OK;
 	struct request *rq = bd->rq;
+	blk_status_t status;
+
 	blk_mq_start_request(rq);
-	if (ex_blk_handle_request(rq, &nr_bytes) != 0)
+
+	if (ex_blk_handle_request(rq) == 0)
+		status = BLK_STS_OK;
+	else
 		status = BLK_STS_IOERR;
-	if (blk_update_request(rq, status, nr_bytes))
-		BUG();
-	blk_mq_end_request(bd->rq, BLK_STS_IOERR);
-	return BLK_STS_IOERR;
+
+	blk_mq_end_request(rq, status);
+	return BLK_STS_OK;
 }
 
 static int ex_blk_open(struct block_device *blkdev, fmode_t mode)
@@ -173,6 +177,28 @@ err:
 
 static void __exit ex_blk_exit(void)
 {
+	if (blk_dev) {
+		if (blk_dev->disk_added) {
+			del_gendisk(blk_dev->disk);
+			blk_dev->disk_added = false;
+		}
+		if (blk_dev->tag_set) {
+			blk_mq_free_tag_set(blk_dev->tag_set);
+			kfree(blk_dev->tag_set);
+			blk_dev->tag_set = NULL;
+		}
+		if (blk_dev->data) {
+			vfree(blk_dev->data);
+			blk_dev->data = NULL;
+		}
+		if (blk_dev->disk) {
+			put_disk(blk_dev->disk);
+			blk_dev->disk = NULL;
+		}
+		kfree(blk_dev);
+		blk_dev = NULL;
+	}
+
 	if (dev_major > 0) {
 		unregister_blkdev(dev_major, DEVICE_NAME);
 		dev_major = 0;
