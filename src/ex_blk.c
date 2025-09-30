@@ -54,6 +54,30 @@ static int __init ex_blk_init(void)
     if (!blk_dev->tag_set)
         goto err;
 
+    blk_dev->tag_set->nr_hw_queues = 1;
+    blk_dev->tag_set->queue_depth = 128;
+    blk_dev->tag_set->numa_node = NUMA_NO_NODE;
+    blk_dev->tag_set->flags = BLK_MQ_F_SHOULD_MERGE;
+
+    if (blk_mq_alloc_tag_set(blk_dev->tag_set))
+        goto err;
+
+    if (blk_mq_init_allocated_queue(blk_dev->tag_set, blk_dev->disk->queue))
+        goto err;
+
+    blk_dev->disk->queue->queuedata = blk_dev;
+    blk_queue_logical_block_size(blk_dev->disk->queue, SECTOR_SIZE);
+
+    blk_dev->disk->major = dev_major;
+    blk_dev->disk->first_minor = 0;
+    blk_dev->disk->minors = 1; // no partitions yet
+    strscpy(blk_dev->disk->disk_name, DEVICE_NAME, sizeof(blk_dev->disk->disk_name));
+    set_capacity(blk_dev->disk, blk_dev->capacity);
+
+    if (add_disk(blk_dev->disk))
+        goto err;
+    blk_dev->disk_added = true;
+
     pr_info("[INIT] module loaded\n");
     return 0;
 
