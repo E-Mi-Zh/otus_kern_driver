@@ -19,90 +19,166 @@
 #define TOTAL_BYTES (NUM_PARTS * PART_SIZE_BYTES)
 
 struct ex_blk_dev {
-    struct gendisk *disk;
-    bool disk_added;
-    sector_t capacity;
-    struct blk_mq_tag_set* tag_set;
-    u8 *data;
+	struct gendisk *disk;
+	bool disk_added;
+	sector_t capacity;
+	struct blk_mq_tag_set *tag_set;
+	u8 *data;
 };
 
 static struct ex_blk_dev *blk_dev = NULL;
 static int dev_major = 0;
 
+static struct blk_mq_ops ex_blk_mq_ops;
+static struct block_device_operations ex_blk_fops;
+
+static int ex_blk_handle_request(struct request *rq, unsigned int *bytes_done)
+{
+	struct ex_blk_dev *dev = rq->q->queuedata;
+	loff_t pos = blk_rq_pos(rq) << 9;
+	loff_t dev_size = (loff_t)(dev->capacity << SECTOR_SHIFT);
+	struct bio_vec bvec;
+	struct req_iterator iter;
+	int dir = rq_data_dir(rq);
+	size_t len;
+	void *buf;
+
+	if (pos >= dev_size)
+		return -EIO;
+
+	rq_for_each_segment(bvec, rq, iter) {
+		len = bvec.bv_len;
+		buf = page_address(bvec.bv_page) + bvec.bv_offset;
+		if (pos + len > dev_size)
+			len = dev_size - pos;
+		if (len == 0)
+			break;
+		if (dir == WRITE)
+			memcpy(dev->data + pos, buf, len);
+		else
+			memcpy(buf, dev->data + pos, len);
+		pos += len;
+		*bytes_done += len;
+	}
+	return 0;
+}
+
+static blk_status_t ex_blk_queue_rq(struct blk_mq_hw_ctx *hctx,
+				    const struct blk_mq_queue_data *bd)
+{
+	unsigned int nr_bytes = 0;
+	blk_status_t status = BLK_STS_OK;
+	struct request *rq = bd->rq;
+	blk_mq_start_request(rq);
+	if (ex_blk_handle_request(rq, &nr_bytes) != 0)
+		status = BLK_STS_IOERR;
+	if (blk_update_request(rq, status, nr_bytes))
+		BUG();
+	blk_mq_end_request(bd->rq, BLK_STS_IOERR);
+	return BLK_STS_IOERR;
+}
+
+static int ex_blk_open(struct block_device *blkdev, fmode_t mode)
+{
+	return 0;
+}
+
+static void ex_blk_release(struct gendisk *disk, fmode_t mode)
+{
+}
+
+static int ex_blk_ioctl(struct block_device *blkdev, fmode_t mode,
+			unsigned int cmd, unsigned long arg)
+{
+	return 0;
+}
+
 static int __init ex_blk_init(void)
 {
-    dev_major = register_blkdev(0, DEVICE_NAME);
-    if (dev_major < 0) {
-        pr_err("[INIT] register_blkdev failed\n");
-        return dev_major;
-    }
+	dev_major = register_blkdev(0, DEVICE_NAME);
+	if (dev_major < 0) {
+		pr_err("[INIT] register_blkdev failed\n");
+		return dev_major;
+	}
 
-    blk_dev = kzalloc(sizeof(*blk_dev), GFP_KERNEL);
-    if (!blk_dev)
-        goto err;
+	blk_dev = kzalloc(sizeof(*blk_dev), GFP_KERNEL);
+	if (!blk_dev)
+		goto err;
 
-    blk_dev->capacity = TOTAL_SECTORS;
-    blk_dev->data = vmalloc(TOTAL_BYTES);
-    if (!blk_dev->data)
-        goto err;
+	blk_dev->capacity = TOTAL_SECTORS;
+	blk_dev->data = vmalloc(TOTAL_BYTES);
+	if (!blk_dev->data)
+		goto err;
 
-    blk_dev->disk = blk_alloc_disk(NUMA_NO_NODE);
-    if (!blk_dev->disk)
-        goto err;
+	blk_dev->disk = blk_alloc_disk(NUMA_NO_NODE);
+	if (!blk_dev->disk)
+		goto err;
 
-    blk_dev->tag_set = kzalloc(sizeof(*blk_dev->tag_set), GFP_KERNEL);
-    if (!blk_dev->tag_set)
-        goto err;
+	blk_dev->tag_set = kzalloc(sizeof(*blk_dev->tag_set), GFP_KERNEL);
+	if (!blk_dev->tag_set)
+		goto err;
 
-    blk_dev->tag_set->nr_hw_queues = 1;
-    blk_dev->tag_set->queue_depth = 128;
-    blk_dev->tag_set->numa_node = NUMA_NO_NODE;
-    blk_dev->tag_set->flags = BLK_MQ_F_SHOULD_MERGE;
+	ex_blk_mq_ops.queue_rq = ex_blk_queue_rq;
+	blk_dev->tag_set->ops = &ex_blk_mq_ops;
 
-    if (blk_mq_alloc_tag_set(blk_dev->tag_set))
-        goto err;
+	blk_dev->tag_set->nr_hw_queues = 1;
+	blk_dev->tag_set->queue_depth = 128;
+	blk_dev->tag_set->numa_node = NUMA_NO_NODE;
+	blk_dev->tag_set->flags = BLK_MQ_F_SHOULD_MERGE;
 
-    if (blk_mq_init_allocated_queue(blk_dev->tag_set, blk_dev->disk->queue))
-        goto err;
+	if (blk_mq_alloc_tag_set(blk_dev->tag_set))
+		goto err;
 
-    blk_dev->disk->queue->queuedata = blk_dev;
-    blk_queue_logical_block_size(blk_dev->disk->queue, SECTOR_SIZE);
+	if (blk_mq_init_allocated_queue(blk_dev->tag_set, blk_dev->disk->queue))
+		goto err;
 
-    blk_dev->disk->major = dev_major;
-    blk_dev->disk->first_minor = 0;
-    blk_dev->disk->minors = 1; // no partitions yet
-    strscpy(blk_dev->disk->disk_name, DEVICE_NAME, sizeof(blk_dev->disk->disk_name));
-    set_capacity(blk_dev->disk, blk_dev->capacity);
+	blk_dev->disk->queue->queuedata = blk_dev;
+	blk_queue_logical_block_size(blk_dev->disk->queue, SECTOR_SIZE);
 
-    if (add_disk(blk_dev->disk))
-        goto err;
-    blk_dev->disk_added = true;
+	ex_blk_fops.owner = THIS_MODULE;
+	ex_blk_fops.open = ex_blk_open;
+	ex_blk_fops.release = ex_blk_release;
+	ex_blk_fops.ioctl = ex_blk_ioctl;
+	blk_dev->disk->fops = &ex_blk_fops;
 
-    pr_info("[INIT] module loaded\n");
-    return 0;
+	blk_dev->disk->major = dev_major;
+	blk_dev->disk->first_minor = 0;
+	blk_dev->disk->minors = 1; // no partitions yet
+	strscpy(blk_dev->disk->disk_name, DEVICE_NAME,
+		sizeof(blk_dev->disk->disk_name));
+	set_capacity(blk_dev->disk, blk_dev->capacity);
+
+	if (add_disk(blk_dev->disk))
+		goto err;
+	blk_dev->disk_added = true;
+
+	pr_info("[INIT] module loaded\n");
+	return 0;
 
 err:
-    if (blk_dev) {
-        if (blk_dev->data) vfree(blk_dev->data);
-        kfree(blk_dev->tag_set);
-        if (blk_dev->disk) put_disk(blk_dev->disk);
-        kfree(blk_dev);
-    }
-    if (dev_major > 0) {
-        unregister_blkdev(dev_major, DEVICE_NAME);
-        dev_major = 0;
-    }
-    return -ENOMEM;
+	if (blk_dev) {
+		if (blk_dev->data)
+			vfree(blk_dev->data);
+		kfree(blk_dev->tag_set);
+		if (blk_dev->disk)
+			put_disk(blk_dev->disk);
+		kfree(blk_dev);
+	}
+	if (dev_major > 0) {
+		unregister_blkdev(dev_major, DEVICE_NAME);
+		dev_major = 0;
+	}
+	return -ENOMEM;
 }
 
 static void __exit ex_blk_exit(void)
 {
-    if (dev_major > 0) {
-        unregister_blkdev(dev_major, DEVICE_NAME);
-        dev_major = 0;
-    }
+	if (dev_major > 0) {
+		unregister_blkdev(dev_major, DEVICE_NAME);
+		dev_major = 0;
+	}
 
-    pr_info("[EXIT] module unloaded\n");
+	pr_info("[EXIT] module unloaded\n");
 }
 
 module_init(ex_blk_init);
