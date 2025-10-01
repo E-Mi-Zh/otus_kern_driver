@@ -29,6 +29,19 @@ struct ex_blk_dev {
 static struct ex_blk_dev *blk_dev = NULL;
 static int dev_major = 0;
 
+struct mbr_partition {
+	u8 boot_flag; /* 0x80 - active, 0x00 - inactive */
+	u8 start_head;
+	u8 start_sector; /* 0-5 bits - first sect, 6-7 - cyl */
+	u8 start_cylinder;
+	u8 part_type;
+	u8 end_head;
+	u8 end_sector;
+	u8 end_cylinder;
+	__le32 start_sector_lba;
+	__le32 nr_sectors;
+} __attribute__((packed));
+
 static struct blk_mq_ops ex_blk_mq_ops;
 static struct block_device_operations ex_blk_fops;
 
@@ -97,6 +110,80 @@ static int ex_blk_ioctl(struct block_device *blkdev, fmode_t mode,
 	return 0;
 }
 
+static void lba_to_chs(u32 lba, u8 *head, u8 *sector, u8 *cylinder)
+{
+	u32 temp;
+
+	/* CHS: 16 heads, 63 sector per line */
+	*sector = (lba % 63) + 1;
+	temp = lba / 63;
+	*head = temp % 16;
+	*cylinder = (temp / 16) & 0xFF;
+
+	/* higher adresses use max values */
+	if (*cylinder > 1023) {
+		*cylinder = 1023 & 0xFF;
+		*head = 15;
+		*sector = 63;
+	}
+}
+
+static int init_mbr(struct ex_blk_dev *dev)
+{
+	struct mbr_partition *part;
+	u8 *mbr = dev->data;
+	int i;
+	u32 start_sector, end_sector;
+	u8 head, sector, cylinder;
+
+	pr_info("Initializing MBR with %d partitions\n", NUM_PARTS);
+
+	memset(mbr, 0, SECTOR_SIZE);
+	start_sector =
+		1; /* MBR in first sector (0), next sector first partition begin */
+
+	/* 0x01BE part table offset */
+	for (i = 0; i < NUM_PARTS; i++) {
+		part = (struct mbr_partition
+				*)(mbr + 0x1BE +
+				   i * sizeof(struct mbr_partition));
+
+		part->boot_flag = 0x00;
+
+		/* CHS partition begins */
+		lba_to_chs(start_sector, &head, &sector, &cylinder);
+		part->start_head = head;
+		part->start_sector = sector | ((cylinder >> 2) & 0xC0);
+		part->start_cylinder = cylinder & 0xFF;
+
+		/* Part type Linux (0x83) */
+		part->part_type = 0x83;
+
+		/* CHS part end */
+		end_sector = start_sector + PART_SECTORS - 1;
+		lba_to_chs(end_sector, &head, &sector, &cylinder);
+		part->end_head = head;
+		part->end_sector = sector | ((cylinder >> 2) & 0xC0);
+		part->end_cylinder = cylinder & 0xFF;
+
+		/* LBA offset and size */
+		part->start_sector_lba = cpu_to_le32(start_sector);
+		part->nr_sectors = cpu_to_le32(PART_SECTORS);
+
+		pr_info("Partition %d: start_sector=%u, nr_sectors=%llu\n", i + 1,
+			start_sector, PART_SECTORS);
+
+		start_sector = start_sector + PART_SECTORS;
+	}
+
+	/* MBR sig */
+	mbr[510] = 0x55;
+	mbr[511] = 0xAA;
+
+	pr_info("MBR initialized successfully\n");
+	return 0;
+}
+
 static int __init ex_blk_init(void)
 {
 	dev_major = register_blkdev(0, DEVICE_NAME);
@@ -113,6 +200,8 @@ static int __init ex_blk_init(void)
 	blk_dev->data = vmalloc(TOTAL_BYTES);
 	if (!blk_dev->data)
 		goto err;
+
+	init_mbr(blk_dev);
 
 	blk_dev->disk = blk_alloc_disk(NUMA_NO_NODE);
 	if (!blk_dev->disk)
@@ -147,7 +236,7 @@ static int __init ex_blk_init(void)
 
 	blk_dev->disk->major = dev_major;
 	blk_dev->disk->first_minor = 0;
-	blk_dev->disk->minors = 1; // no partitions yet
+	blk_dev->disk->minors = NUM_PARTS + 1;
 	strscpy(blk_dev->disk->disk_name, DEVICE_NAME,
 		sizeof(blk_dev->disk->disk_name));
 	set_capacity(blk_dev->disk, blk_dev->capacity);
