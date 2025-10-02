@@ -242,36 +242,39 @@ static int init_mbr(struct ex_blk_dev *dev)
 
 static int __init ex_blk_init(void)
 {
-	dev_major = register_blkdev(0, DEVICE_NAME);
-	if (dev_major < 0) {
-		pr_err("[INIT] register_blkdev failed\n");
-		return dev_major;
-	}
 
 	blk_dev = kzalloc(sizeof(*blk_dev), GFP_KERNEL);
     if (!blk_dev) {
-        pr_err(DEVICE_NAME ": Failed to allocate struct block_dev\n");
+        pr_err("[INIT] " DEVICE_NAME ": Failed to allocate struct block_dev\n");
         goto err;
     }
 
 	blk_dev->capacity = TOTAL_SECTORS;
 	blk_dev->data = vmalloc(TOTAL_BYTES);
 	if (!blk_dev->data) {
-		pr_err(DEVICE_NAME ": Failed to allocate device IO buffer\n");
+		pr_err("[INIT] " DEVICE_NAME ": Failed to allocate device IO buffer\n");
 		goto err;
 	}
+
+	dev_major = register_blkdev(0, DEVICE_NAME);
+	if (dev_major < 0) {
+		pr_err("[INIT] register_blkdev failed\n");
+		return dev_major;
+	}
+
+
 
 	init_mbr(blk_dev);
 
 	blk_dev->disk = blk_alloc_disk(NUMA_NO_NODE);
 	if (!blk_dev->disk) {
-		pr_err(DEVICE_NAME ": Failed to allocate disk structure\n");
+		pr_err("[INIT] " DEVICE_NAME ": Failed to allocate disk structure\n");
 		goto err;
 	}
 
 	blk_dev->tag_set = kzalloc(sizeof(*blk_dev->tag_set), GFP_KERNEL);
 	if (!blk_dev->tag_set) {
-		pr_err(DEVICE_NAME ": Failed to allocate memory for tag set struct!\n");
+		pr_err("[INIT] " DEVICE_NAME ": Failed to allocate memory for tag set struct!\n");
 		goto err;
 	}
 
@@ -279,17 +282,18 @@ static int __init ex_blk_init(void)
 	blk_dev->tag_set->ops = &ex_blk_mq_ops;
 
 	blk_dev->tag_set->nr_hw_queues = 1;
+	blk_dev->tag_set->nr_maps = 1;
 	blk_dev->tag_set->queue_depth = 128;
 	blk_dev->tag_set->numa_node = NUMA_NO_NODE;
 	blk_dev->tag_set->flags = BLK_MQ_F_SHOULD_MERGE;
 
 	if (blk_mq_alloc_tag_set(blk_dev->tag_set)) {
-		pr_err(DEVICE_NAME ": Failed to allocate tag set\n");
+		pr_err("[INIT] " DEVICE_NAME ": Failed to allocate tag set\n");
 		goto err;
 	}
 
 	if (blk_mq_init_allocated_queue(blk_dev->tag_set, blk_dev->disk->queue)) {
-		pr_err(DEVICE_NAME ": Failed to init queue\n");
+		pr_err("[INIT] " DEVICE_NAME ": Failed to init queue\n");
 		goto err;
 	}
 
@@ -305,12 +309,13 @@ static int __init ex_blk_init(void)
 	blk_dev->disk->major = dev_major;
 	blk_dev->disk->first_minor = 0;
 	blk_dev->disk->minors = NUM_PARTS + 1;
+	blk_dev->disk->private_data = &blk_dev;
 	strscpy(blk_dev->disk->disk_name, DEVICE_NAME,
 		sizeof(blk_dev->disk->disk_name));
 	set_capacity(blk_dev->disk, blk_dev->capacity);
 
 	if (add_disk(blk_dev->disk)) {
-		pr_err(DEVICE_NAME ": Failed to add disk!\n");
+		pr_err("[INIT] " DEVICE_NAME ": Failed to add disk!\n");
 		goto err;
 	}
 	blk_dev->disk_added = true;
