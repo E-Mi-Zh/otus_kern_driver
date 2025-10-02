@@ -8,6 +8,7 @@
 #include <linux/vmalloc.h>
 #include <linux/blk-mq.h>
 #include <linux/kdev_t.h>
+#include <linux/hdreg.h>
 
 #define DEVICE_NAME "ex_blk"
 
@@ -95,19 +96,67 @@ static blk_status_t ex_blk_queue_rq(struct blk_mq_hw_ctx *hctx,
 	return BLK_STS_OK;
 }
 
-static int ex_blk_open(struct block_device *blkdev, fmode_t mode)
+static int ex_blk_open(struct block_device *bdev, fmode_t mode)
 {
+	struct request_queue *q = bdev_get_queue(bdev);
+
+	if (!q)
+		return -ENXIO;
+
+	if (!blk_get_queue(q))
+		return -ENXIO;
+
+	pr_info(DEVICE_NAME ": Device opened, minor=%d\n", MINOR(bdev->bd_dev));
 	return 0;
 }
 
 static void ex_blk_release(struct gendisk *disk, fmode_t mode)
 {
+	struct request_queue *q = disk->queue;
+
+	if (q)
+		blk_put_queue(q);
+
+	pr_info(DEVICE_NAME ": Device released\n");
 }
 
-static int ex_blk_ioctl(struct block_device *blkdev, fmode_t mode,
+static int ex_blk_ioctl(struct block_device *dev, fmode_t mode,
 			unsigned int cmd, unsigned long arg)
 {
-	return 0;
+	switch (cmd) {
+	case BLKGETSIZE: {
+		unsigned long size = TOTAL_SECTORS;
+		if (copy_to_user((void __user *)arg, &size, sizeof(size)))
+			return -EFAULT;
+		return 0;
+	}
+	case BLKGETSIZE64: {
+		u64 size = TOTAL_BYTES;
+		if (copy_to_user((void __user *)arg, &size, sizeof(size)))
+			return -EFAULT;
+		return 0;
+	}
+	case HDIO_GETGEO: {
+		struct hd_geometry geo;
+		/* Рассчитываем реалистичную геометрию */
+		geo.heads = 16;
+		geo.sectors = 63;
+		geo.cylinders = TOTAL_SECTORS / (geo.heads * geo.sectors);
+		geo.start = 0;
+
+		if (copy_to_user((void __user *)arg, &geo, sizeof(geo)))
+			return -EFAULT;
+		return 0;
+	}
+	case BLKRRPART:
+		/* Перечитать таблицу разделов - поддерживаем */
+		return 0;
+	default:
+		printk(KERN_DEBUG DEVICE_NAME ": Unknown ioctl: 0x%08x\n", cmd);
+		break;
+	}
+
+	return -ENOTTY;
 }
 
 static void lba_to_chs(u32 lba, u8 *head, u8 *sector, u8 *cylinder)
@@ -170,8 +219,8 @@ static int init_mbr(struct ex_blk_dev *dev)
 		part->start_sector_lba = cpu_to_le32(start_sector);
 		part->nr_sectors = cpu_to_le32(PART_SECTORS);
 
-		pr_info("Partition %d: start_sector=%u, nr_sectors=%llu\n", i + 1,
-			start_sector, PART_SECTORS);
+		pr_info("Partition %d: start_sector=%u, nr_sectors=%llu\n",
+			i + 1, start_sector, PART_SECTORS);
 
 		start_sector = start_sector + PART_SECTORS;
 	}
