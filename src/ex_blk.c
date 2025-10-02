@@ -59,8 +59,9 @@ static int ex_blk_handle_request(struct request *rq)
 	void *buf;
 
 	if (pos >= dev_sectors) {
-		pr_err(DEVICE_NAME ": Request beyond device limits: pos sector: %lld, dev  sectors size: %lld\n",
-               pos, dev_sectors);
+		pr_err(DEVICE_NAME
+		       ": Request beyond device limits: pos sector: %lld, dev  sectors size: %lld\n",
+		       pos, dev_sectors);
 		return -EIO;
 	}
 
@@ -73,10 +74,10 @@ static int ex_blk_handle_request(struct request *rq)
 
 		len = sector_count << SECTOR_SHIFT;
 		buf = page_address(bvec.bv_page) + bvec.bv_offset;
-        if (!buf) {
-            pr_err(DEVICE_NAME ": Failed to get buffer address\n");
-            return -EIO;
-        }
+		if (!buf) {
+			pr_err(DEVICE_NAME ": Failed to get buffer address\n");
+			return -EIO;
+		}
 		if (dir == WRITE)
 			memcpy(dev->data + (pos << SECTOR_SHIFT), buf, len);
 		else
@@ -242,17 +243,18 @@ static int init_mbr(struct ex_blk_dev *dev)
 
 static int __init ex_blk_init(void)
 {
-
 	blk_dev = kzalloc(sizeof(*blk_dev), GFP_KERNEL);
-    if (!blk_dev) {
-        pr_err("[INIT] " DEVICE_NAME ": Failed to allocate struct block_dev\n");
-        goto err;
-    }
+	if (!blk_dev) {
+		pr_err("[INIT] " DEVICE_NAME
+		       ": Failed to allocate struct block_dev\n");
+		goto err;
+	}
 
 	blk_dev->capacity = TOTAL_SECTORS;
 	blk_dev->data = vmalloc(TOTAL_BYTES);
 	if (!blk_dev->data) {
-		pr_err("[INIT] " DEVICE_NAME ": Failed to allocate device IO buffer\n");
+		pr_err("[INIT] " DEVICE_NAME
+		       ": Failed to allocate device IO buffer\n");
 		goto err;
 	}
 
@@ -262,19 +264,19 @@ static int __init ex_blk_init(void)
 		return dev_major;
 	}
 
-
-
 	init_mbr(blk_dev);
 
 	blk_dev->disk = blk_alloc_disk(NUMA_NO_NODE);
 	if (!blk_dev->disk) {
-		pr_err("[INIT] " DEVICE_NAME ": Failed to allocate disk structure\n");
+		pr_err("[INIT] " DEVICE_NAME
+		       ": Failed to allocate disk structure\n");
 		goto err;
 	}
 
 	blk_dev->tag_set = kzalloc(sizeof(*blk_dev->tag_set), GFP_KERNEL);
 	if (!blk_dev->tag_set) {
-		pr_err("[INIT] " DEVICE_NAME ": Failed to allocate memory for tag set struct!\n");
+		pr_err("[INIT] " DEVICE_NAME
+		       ": Failed to allocate memory for tag set struct!\n");
 		goto err;
 	}
 
@@ -292,7 +294,8 @@ static int __init ex_blk_init(void)
 		goto err;
 	}
 
-	if (blk_mq_init_allocated_queue(blk_dev->tag_set, blk_dev->disk->queue)) {
+	if (blk_mq_init_allocated_queue(blk_dev->tag_set,
+					blk_dev->disk->queue)) {
 		pr_err("[INIT] " DEVICE_NAME ": Failed to init queue\n");
 		goto err;
 	}
