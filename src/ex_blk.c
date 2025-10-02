@@ -58,8 +58,11 @@ static int ex_blk_handle_request(struct request *rq)
 	size_t len;
 	void *buf;
 
-	if (pos >= dev_sectors)
+	if (pos >= dev_sectors) {
+		pr_err(DEVICE_NAME ": Request beyond device limits: pos sector: %lld, dev  sectors size: %lld\n",
+               pos, dev_sectors);
 		return -EIO;
+	}
 
 	rq_for_each_segment(bvec, rq, iter) {
 		sector_count = bvec.bv_len >> SECTOR_SHIFT;
@@ -70,6 +73,10 @@ static int ex_blk_handle_request(struct request *rq)
 
 		len = sector_count << SECTOR_SHIFT;
 		buf = page_address(bvec.bv_page) + bvec.bv_offset;
+        if (!buf) {
+            pr_err(DEVICE_NAME ": Failed to get buffer address\n");
+            return -EIO;
+        }
 		if (dir == WRITE)
 			memcpy(dev->data + (pos << SECTOR_SHIFT), buf, len);
 		else
@@ -138,7 +145,7 @@ static int ex_blk_ioctl(struct block_device *dev, fmode_t mode,
 	}
 	case HDIO_GETGEO: {
 		struct hd_geometry geo;
-		/* Рассчитываем реалистичную геометрию */
+		/* calc disk geometry */
 		geo.heads = 16;
 		geo.sectors = 63;
 		geo.cylinders = TOTAL_SECTORS / (geo.heads * geo.sectors);
@@ -149,10 +156,10 @@ static int ex_blk_ioctl(struct block_device *dev, fmode_t mode,
 		return 0;
 	}
 	case BLKRRPART:
-		/* Перечитать таблицу разделов - поддерживаем */
+		/* reread part table */
 		return 0;
 	default:
-		printk(KERN_DEBUG DEVICE_NAME ": Unknown ioctl: 0x%08x\n", cmd);
+		pr_info(DEVICE_NAME ": Unknown ioctl: 0x%08x\n", cmd);
 		break;
 	}
 
@@ -242,23 +249,31 @@ static int __init ex_blk_init(void)
 	}
 
 	blk_dev = kzalloc(sizeof(*blk_dev), GFP_KERNEL);
-	if (!blk_dev)
-		goto err;
+    if (!blk_dev) {
+        pr_err(DEVICE_NAME ": Failed to allocate struct block_dev\n");
+        goto err;
+    }
 
 	blk_dev->capacity = TOTAL_SECTORS;
 	blk_dev->data = vmalloc(TOTAL_BYTES);
-	if (!blk_dev->data)
+	if (!blk_dev->data) {
+		pr_err(DEVICE_NAME ": Failed to allocate device IO buffer\n");
 		goto err;
+	}
 
 	init_mbr(blk_dev);
 
 	blk_dev->disk = blk_alloc_disk(NUMA_NO_NODE);
-	if (!blk_dev->disk)
+	if (!blk_dev->disk) {
+		pr_err(DEVICE_NAME ": Failed to allocate disk structure\n");
 		goto err;
+	}
 
 	blk_dev->tag_set = kzalloc(sizeof(*blk_dev->tag_set), GFP_KERNEL);
-	if (!blk_dev->tag_set)
+	if (!blk_dev->tag_set) {
+		pr_err(DEVICE_NAME ": Failed to allocate tag set!\n");
 		goto err;
+	}
 
 	ex_blk_mq_ops.queue_rq = ex_blk_queue_rq;
 	blk_dev->tag_set->ops = &ex_blk_mq_ops;
@@ -290,8 +305,10 @@ static int __init ex_blk_init(void)
 		sizeof(blk_dev->disk->disk_name));
 	set_capacity(blk_dev->disk, blk_dev->capacity);
 
-	if (add_disk(blk_dev->disk))
+	if (add_disk(blk_dev->disk)) {
+		pr_err(DEVICE_NAME ": Failed to add disk!\n");
 		goto err;
+	}
 	blk_dev->disk_added = true;
 
 	pr_info("[INIT] module loaded\n");
