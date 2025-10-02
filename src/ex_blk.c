@@ -271,7 +271,7 @@ static int __init ex_blk_init(void)
 
 	blk_dev->tag_set = kzalloc(sizeof(*blk_dev->tag_set), GFP_KERNEL);
 	if (!blk_dev->tag_set) {
-		pr_err(DEVICE_NAME ": Failed to allocate tag set!\n");
+		pr_err(DEVICE_NAME ": Failed to allocate memory for tag set struct!\n");
 		goto err;
 	}
 
@@ -283,11 +283,15 @@ static int __init ex_blk_init(void)
 	blk_dev->tag_set->numa_node = NUMA_NO_NODE;
 	blk_dev->tag_set->flags = BLK_MQ_F_SHOULD_MERGE;
 
-	if (blk_mq_alloc_tag_set(blk_dev->tag_set))
+	if (blk_mq_alloc_tag_set(blk_dev->tag_set)) {
+		pr_err(DEVICE_NAME ": Failed to allocate tag set\n");
 		goto err;
+	}
 
-	if (blk_mq_init_allocated_queue(blk_dev->tag_set, blk_dev->disk->queue))
+	if (blk_mq_init_allocated_queue(blk_dev->tag_set, blk_dev->disk->queue)) {
+		pr_err(DEVICE_NAME ": Failed to init queue\n");
 		goto err;
+	}
 
 	blk_dev->disk->queue->queuedata = blk_dev;
 	blk_queue_logical_block_size(blk_dev->disk->queue, SECTOR_SIZE);
