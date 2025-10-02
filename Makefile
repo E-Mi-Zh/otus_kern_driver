@@ -2,8 +2,8 @@ PWD := $(shell pwd)
 KDIR ?= /lib/modules/$(shell uname -r)/build
 
 BLK_MODULE := ex_blk
-#TEST_DIR := checker
-#TEST_SCRIPT := $(TEST_DIR)/main.py
+TEST_DIR := checker
+TEST_SCRIPT := $(TEST_DIR)/main.py
 
 SRC_DIR := $(PWD)/src
 BUILD_DIR := $(PWD)/build
@@ -13,20 +13,12 @@ CLANG_FORMAT_VERS ?= 19
 CLANG_FORMAT := clang-format-$(CLANG_FORMAT_VERS)
 CLANG_FORMAT_FLAGS += -i
 FORMAT_FILES := $(SRC_DIR)/*.[ch]
-#PYTHON_FORMAT_TOOL = black
-#PYTHON_FORMAT_FILES = \
-# 	$(TEST_DIR)/__init__.py \
-# 	$(TEST_DIR)/base_tester.py \
-# 	$(TEST_DIR)/main.py \
-# 	$(TEST_DIR)/list_tester.py \
-# 	$(TEST_DIR)/queue_tester.py \
-# 	$(TEST_DIR)/rb_tree_tester.py \
-# 	$(TEST_DIR)/bitmap_tester.py \
-# 	$(TEST_DIR)/bin_search_tester.py \
-# 	$(TEST_DIR)/bin_tree_tester.py \
-# 	$(TEST_DIR)/stack_tester.py \
-# 	$(TEST_DIR)/brackets_tester.py \
-# 	$(TEST_DIR)/stack2_tester.py \
+PYTHON_FORMAT_TOOL = black
+PYTHON_FORMAT_FILES = \
+ 	$(TEST_DIR)/__init__.py \
+ 	$(TEST_DIR)/base_tester.py \
+ 	$(TEST_DIR)/main.py \
+ 	$(TEST_DIR)/blk_tester.py \
 
 $(shell mkdir -p $(BUILD_DIR))
 
@@ -44,8 +36,8 @@ format:
 	$(CLANG_FORMAT) $(CLANG_FORMAT_FLAGS) $(FORMAT_FILES)
 	@echo "Code formatted with clang-format"
 
-# format-python:
-# 	   $(PYTHON_FORMAT_TOOL) $(PYTHON_FORMAT_FILES)
+format-python:
+	$(PYTHON_FORMAT_TOOL) $(PYTHON_FORMAT_FILES)
 
 check: check-blk
 
@@ -64,6 +56,14 @@ uninstall:
 	depmod -a
 	@echo "Modules uninstalled"
 
+load-blk:
+	insmod $(BUILD_DIR)/$(BLK_MODULE).ko
+	@echo "Module $(BLK_MODULE) loaded"
+
+unload-blk:
+	rmmod $(BLK_MODULE) || true
+	@echo "Module $(BLK_MODULE) unloaded"
+
 help:
 	@echo "Available targets:"
 	@echo "  all              - Build the kernel module (default)"
@@ -73,3 +73,5 @@ help:
 	@echo "  check-blk        - Test blk module"
 	@echo "  install          - Install module to system"
 	@echo "  uninstall        - Remove module from system"
+	@echo "  load-blk         - Build and load blk module"
+	@echo "  unload-blk       - Unload blk module"
