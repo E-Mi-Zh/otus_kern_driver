@@ -16,8 +16,9 @@
 #define PART_SIZE_MB 100
 #define PART_SIZE_BYTES (PART_SIZE_MB * 1024 * 1024ULL)
 #define PART_SECTORS (PART_SIZE_BYTES / SECTOR_SIZE)
-#define TOTAL_SECTORS (NUM_PARTS * PART_SECTORS)
-#define TOTAL_BYTES (NUM_PARTS * PART_SIZE_BYTES)
+#define TOTAL_SECTORS \
+	(NUM_PARTS * PART_SECTORS + 1) /* 1 extra sector for MBR */
+#define TOTAL_BYTES (TOTAL_SECTORS * SECTOR_SIZE)
 
 struct ex_blk_dev {
 	struct gendisk *disk;
@@ -50,11 +51,12 @@ static int ex_blk_handle_request(struct request *rq)
 {
 	struct ex_blk_dev *dev = rq->q->queuedata;
 	sector_t pos = blk_rq_pos(rq);
+	sector_t current_pos = pos;
 	sector_t dev_sectors = dev->capacity;
 	struct bio_vec bvec;
 	struct req_iterator iter;
 	int dir = rq_data_dir(rq);
-	sector_t sector_count;
+	sector_t sector_count, remaining_sectors;
 	size_t len;
 	void *buf;
 
@@ -67,8 +69,12 @@ static int ex_blk_handle_request(struct request *rq)
 
 	rq_for_each_segment(bvec, rq, iter) {
 		sector_count = bvec.bv_len >> SECTOR_SHIFT;
-		if (pos + sector_count > dev_sectors)
-			sector_count = dev_sectors - pos;
+		remaining_sectors = dev_sectors - current_pos;
+		if (sector_count > remaining_sectors) {
+			sector_count = remaining_sectors;
+			if (sector_count <= 0)
+				break;
+		}
 		if (sector_count == 0)
 			break;
 
@@ -78,11 +84,14 @@ static int ex_blk_handle_request(struct request *rq)
 			pr_err(DEVICE_NAME ": Failed to get buffer address\n");
 			return -EIO;
 		}
+
 		if (dir == WRITE)
-			memcpy(dev->data + (pos << SECTOR_SHIFT), buf, len);
+			memcpy(dev->data + (current_pos << SECTOR_SHIFT), buf,
+			       len);
 		else
-			memcpy(buf, dev->data + (pos << SECTOR_SHIFT), len);
-		pos = pos + sector_count;
+			memcpy(buf, dev->data + (current_pos << SECTOR_SHIFT),
+			       len);
+		current_pos = current_pos + sector_count;
 	}
 	return 0;
 }
@@ -322,6 +331,9 @@ static int __init ex_blk_init(void)
 		goto err;
 	}
 	blk_dev->disk_added = true;
+
+	pr_info("[INIT] Device capacity: %llu sectors, buffer size: %llu bytes\n",
+		blk_dev->capacity, TOTAL_BYTES);
 
 	pr_info("[INIT] module loaded\n");
 	return 0;
