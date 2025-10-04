@@ -10,9 +10,13 @@
 #include <linux/vmalloc.h>
 #include <linux/blk-mq.h>
 #include <linux/kdev_t.h>
-
+#include <linux/proc_fs.h>
+#include <linux/string.h>
 
 #define DEVICE_NAME "ex_blk"
+#define PROC_DIR_NAME DEVICE_NAME
+#define PROC_FILE_NAME "capacity"
+#define MAX_CAP_STRLEN 32
 
 #define NUM_PARTS 3
 #define PART_SIZE_MB 100
@@ -48,6 +52,11 @@ struct mbr_partition {
 
 static struct blk_mq_ops ex_blk_mq_ops;
 static struct block_device_operations ex_blk_fops;
+
+/* for /proc support */
+static struct proc_dir_entry *proc_dir = NULL;
+static struct proc_dir_entry *proc_file = NULL;
+static struct proc_ops proc_fops;
 
 static int ex_blk_handle_request(struct request *rq)
 {
@@ -143,7 +152,7 @@ static int ex_blk_ioctl(struct block_device *dev, fmode_t mode,
 			unsigned int cmd, unsigned long arg)
 {
 	pr_info("BLKGETSIZE=0x%08x, BLKGETSIZE64=0x%08lx, HDIO_GETGEO=0x%08x, cmd=0x%08x\n",
-        BLKGETSIZE, BLKGETSIZE64, HDIO_GETGEO, cmd);
+		BLKGETSIZE, BLKGETSIZE64, HDIO_GETGEO, cmd);
 	switch (cmd) {
 	case BLKGETSIZE: {
 		pr_info("BLKGETSIZE\n");
@@ -168,7 +177,6 @@ static int ex_blk_ioctl(struct block_device *dev, fmode_t mode,
 		geo.heads = 16;
 		geo.sectors = 63;
 		geo.cylinders = TOTAL_SECTORS / (geo.heads * geo.sectors);
-		// geo.start = 0;
 
 		if (copy_to_user((void __user *)arg, &geo, sizeof(geo)))
 			return -EFAULT;
@@ -259,6 +267,70 @@ static int init_mbr(struct ex_blk_dev *dev)
 	return 0;
 }
 
+static int proc_open(struct inode *inode, struct file *file)
+{
+	return 0;
+}
+
+static int proc_release(struct inode *inode, struct file *file)
+{
+	return 0;
+}
+
+static ssize_t proc_read(struct file *file, char __user *buf, size_t count,
+			 loff_t *ppos)
+{
+	ssize_t ret = 0;
+	size_t len;
+	char data_buffer[MAX_CAP_STRLEN];
+
+	len = snprintf(data_buffer, sizeof(data_buffer),
+		       "Capacity: %llu sectors\n", blk_dev->capacity);
+
+	if (len >= MAX_CAP_STRLEN - 1) {
+		len = MAX_CAP_STRLEN - 1;
+	}
+	data_buffer[len] = '\0';
+
+	// pr_info("data_buffer=%s len=%lu count=%lu\n", data_buffer, len, count);
+
+	if (*ppos >= len) {
+		return 0;
+	}
+
+	if (*ppos + count > len) {
+		count = len - *ppos;
+	}
+
+	if (copy_to_user(buf, data_buffer + *ppos, count)) {
+		return -EFAULT;
+	}
+
+	*ppos = *ppos + count;
+	ret = count;
+
+	return ret;
+}
+
+static ssize_t proc_write(struct file *file, const char __user *buf,
+			  size_t count, loff_t *ppos)
+{
+	char new_buffer[MAX_CAP_STRLEN];
+
+	if (count > sizeof(new_buffer)) {
+		count = sizeof(new_buffer);
+	}
+
+	if (copy_from_user(&new_buffer, buf, count)) {
+		return -EFAULT;
+	}
+
+	new_buffer[count] = '\0';
+	pr_info("Written to proc file: %s\n", new_buffer);
+
+	return count;
+}
+
 static int __init ex_blk_init(void)
 {
 	blk_dev = kzalloc(sizeof(*blk_dev), GFP_KERNEL);
@@ -344,6 +416,25 @@ static int __init ex_blk_init(void)
 	pr_info("[INIT] Device capacity: %llu sectors, buffer size: %llu bytes\n",
 		blk_dev->capacity, TOTAL_BYTES);
 
+	proc_fops.proc_open = proc_open;
+	proc_fops.proc_read = proc_read;
+	proc_fops.proc_write = proc_write;
+	proc_fops.proc_release = proc_release;
+	proc_dir = proc_mkdir(PROC_DIR_NAME, NULL);
+	if (!proc_dir) {
+		pr_err("[INIT] Failed to create proc directory\n");
+		return -ENOMEM;
+	}
+	proc_file = proc_create(PROC_FILE_NAME, 0666, proc_dir, &proc_fops);
+	if (!proc_file) {
+		printk(KERN_ERR "Failed to create proc file\n");
+		remove_proc_entry(PROC_DIR_NAME, NULL);
+		return -ENOMEM;
+	}
+
+	pr_info("[INIT] Proc file created: /proc/%s/%s\n", PROC_DIR_NAME,
+		PROC_FILE_NAME);
+
 	pr_info("[INIT] module loaded\n");
 	return 0;
 
@@ -390,6 +481,14 @@ static void __exit ex_blk_exit(void)
 	if (dev_major > 0) {
 		unregister_blkdev(dev_major, DEVICE_NAME);
 		dev_major = 0;
+	}
+
+	if (proc_file) {
+		remove_proc_entry(PROC_FILE_NAME, proc_dir);
+	}
+
+	if (proc_dir) {
+		remove_proc_entry(PROC_DIR_NAME, NULL);
 	}
 
 	pr_info("[EXIT] module unloaded\n");
