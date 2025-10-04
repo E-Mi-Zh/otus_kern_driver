@@ -3,12 +3,14 @@
 #include <linux/init.h>
 #include <linux/module.h>
 #include <linux/fs.h>
+#include <linux/hdreg.h>
+#include <linux/blkpg.h>
 #include <linux/blkdev.h>
 #include <linux/slab.h>
 #include <linux/vmalloc.h>
 #include <linux/blk-mq.h>
 #include <linux/kdev_t.h>
-#include <linux/hdreg.h>
+
 
 #define DEVICE_NAME "ex_blk"
 
@@ -140,26 +142,33 @@ static void ex_blk_release(struct gendisk *disk, fmode_t mode)
 static int ex_blk_ioctl(struct block_device *dev, fmode_t mode,
 			unsigned int cmd, unsigned long arg)
 {
+	pr_info("BLKGETSIZE=0x%08x, BLKGETSIZE64=0x%08lx, HDIO_GETGEO=0x%08x, cmd=0x%08x\n",
+        BLKGETSIZE, BLKGETSIZE64, HDIO_GETGEO, cmd);
 	switch (cmd) {
 	case BLKGETSIZE: {
+		pr_info("BLKGETSIZE\n");
 		unsigned long size = TOTAL_SECTORS;
 		if (copy_to_user((void __user *)arg, &size, sizeof(size)))
 			return -EFAULT;
 		return 0;
 	}
 	case BLKGETSIZE64: {
+		pr_info("BLKGETSIZE64\n");
 		u64 size = TOTAL_BYTES;
 		if (copy_to_user((void __user *)arg, &size, sizeof(size)))
 			return -EFAULT;
 		return 0;
 	}
 	case HDIO_GETGEO: {
+		pr_info("HDIO_GETGEO\n");
 		struct hd_geometry geo;
+		memset(&geo, 0, sizeof(geo));
+		geo.start = get_start_sect(dev);
 		/* calc disk geometry */
 		geo.heads = 16;
 		geo.sectors = 63;
 		geo.cylinders = TOTAL_SECTORS / (geo.heads * geo.sectors);
-		geo.start = 0;
+		// geo.start = 0;
 
 		if (copy_to_user((void __user *)arg, &geo, sizeof(geo)))
 			return -EFAULT;
@@ -172,7 +181,7 @@ static int ex_blk_ioctl(struct block_device *dev, fmode_t mode,
 		pr_info(DEVICE_NAME ": Unknown ioctl: 0x%08x\n", cmd);
 		break;
 	}
-
+	pr_info("ioctl %u 0x%08x\n", cmd, cmd);
 	return -ENOTTY;
 }
 
