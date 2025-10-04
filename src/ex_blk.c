@@ -18,6 +18,13 @@
 #define PROC_FILE_NAME "capacity"
 #define MAX_CAP_STRLEN 32
 
+#define DRIVER_NAME DEVICE_NAME
+#define SYSFS_ATTR_NAME "capacity"
+
+static struct device *example_dev = NULL;
+static struct device_attribute dev_attr_data;
+static struct class *example_class;
+
 #define NUM_PARTS 3
 #define PART_SIZE_MB 100
 #define PART_SIZE_BYTES (PART_SIZE_MB * 1024 * 1024ULL)
@@ -331,13 +338,79 @@ static ssize_t proc_write(struct file *file, const char __user *buf,
 	return count;
 }
 
+static ssize_t data_show(struct device *dev, struct device_attribute *attr,
+			 char *buf)
+{
+	ssize_t count = 0;
+	char data_buffer[MAX_CAP_STRLEN];
+	size_t len;
+
+	len = snprintf(data_buffer, sizeof(data_buffer),
+		       "Capacity: %llu sectors\n\n", blk_dev->capacity);
+
+	if (len >= MAX_CAP_STRLEN - 1) {
+		len = MAX_CAP_STRLEN - 1;
+	}
+	data_buffer[len] = '\0';
+
+	count = scnprintf(buf, len, "%s", data_buffer);
+
+	return count;
+}
+
+static ssize_t data_store(struct device *dev, struct device_attribute *attr,
+			  const char *buf, size_t count)
+{
+	char new_buffer[MAX_CAP_STRLEN];
+
+	if (count > 0) {
+		memcpy(new_buffer, buf, count - 1);
+		new_buffer[count] = '\0';
+		pr_info("Written to sysfs file: %s\n", new_buffer);
+	}
+
+	return count;
+}
+
 static int __init ex_blk_init(void)
 {
+	int ret;
+
 	dev_major = register_blkdev(0, DEVICE_NAME);
 	if (dev_major < 0) {
 		pr_err("[INIT] register_blkdev failed\n");
 		return dev_major;
 	}
+
+	dev_attr_data.attr.name = SYSFS_ATTR_NAME;
+	dev_attr_data.attr.mode = S_IWUSR | S_IRUSR | S_IRGRP | S_IWGRP |
+				  S_IROTH | S_IWOTH;
+	dev_attr_data.show = data_show;
+	dev_attr_data.store = data_store;
+
+	example_class = class_create(THIS_MODULE, DRIVER_NAME);
+	if (IS_ERR(example_class)) {
+		ret = PTR_ERR(example_class);
+		pr_err("[INIT] Failed to create class: %d\n", ret);
+		return ret;
+	}
+	example_dev = device_create(example_class, NULL, 0, NULL, DRIVER_NAME);
+	if (IS_ERR(example_dev)) {
+		ret = PTR_ERR(example_dev);
+		pr_err("[INIT] Failed to create device: %d\n", ret);
+		class_destroy(example_class);
+		return ret;
+	}
+
+	ret = device_create_file(example_dev, &dev_attr_data);
+	if (ret) {
+		pr_err("Failed to create device file: %d\n", ret);
+		device_destroy(example_class, 0);
+		class_destroy(example_class);
+		return ret;
+	}
+	pr_info("[INIT] Sysfs device file created: /sys/class/%s/%s/data\n",
+		DRIVER_NAME, DRIVER_NAME);
 
 	blk_dev = kzalloc(sizeof(*blk_dev), GFP_KERNEL);
 	if (!blk_dev) {
@@ -495,6 +568,14 @@ static void __exit ex_blk_exit(void)
 
 	if (proc_dir) {
 		remove_proc_entry(PROC_DIR_NAME, NULL);
+	}
+
+	if (example_dev) {
+		device_remove_file(example_dev, &dev_attr_data);
+		device_destroy(example_class, 0);
+	}
+	if (example_class) {
+		class_destroy(example_class);
 	}
 
 	pr_info("[EXIT] module unloaded\n");
