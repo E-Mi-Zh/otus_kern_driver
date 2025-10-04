@@ -121,7 +121,7 @@ static blk_status_t ex_blk_queue_rq(struct blk_mq_hw_ctx *hctx,
 		status = BLK_STS_IOERR;
 
 	blk_mq_end_request(rq, status);
-	return BLK_STS_OK;
+	return status;
 }
 
 static int ex_blk_open(struct block_device *bdev, fmode_t mode)
@@ -333,6 +333,12 @@ static ssize_t proc_write(struct file *file, const char __user *buf,
 
 static int __init ex_blk_init(void)
 {
+	dev_major = register_blkdev(0, DEVICE_NAME);
+	if (dev_major < 0) {
+		pr_err("[INIT] register_blkdev failed\n");
+		return dev_major;
+	}
+
 	blk_dev = kzalloc(sizeof(*blk_dev), GFP_KERNEL);
 	if (!blk_dev) {
 		pr_err("[INIT] " DEVICE_NAME
@@ -346,12 +352,6 @@ static int __init ex_blk_init(void)
 		pr_err("[INIT] " DEVICE_NAME
 		       ": Failed to allocate device IO buffer\n");
 		goto err;
-	}
-
-	dev_major = register_blkdev(0, DEVICE_NAME);
-	if (dev_major < 0) {
-		pr_err("[INIT] register_blkdev failed\n");
-		return dev_major;
 	}
 
 	init_mbr(blk_dev);
@@ -423,13 +423,13 @@ static int __init ex_blk_init(void)
 	proc_dir = proc_mkdir(PROC_DIR_NAME, NULL);
 	if (!proc_dir) {
 		pr_err("[INIT] Failed to create proc directory\n");
-		return -ENOMEM;
+		goto err;
 	}
 	proc_file = proc_create(PROC_FILE_NAME, 0666, proc_dir, &proc_fops);
 	if (!proc_file) {
-		printk(KERN_ERR "Failed to create proc file\n");
+		pr_err("[INIT] Failed to create proc file\n");
 		remove_proc_entry(PROC_DIR_NAME, NULL);
-		return -ENOMEM;
+		goto err;
 	}
 
 	pr_info("[INIT] Proc file created: /proc/%s/%s\n", PROC_DIR_NAME,
@@ -440,11 +440,17 @@ static int __init ex_blk_init(void)
 
 err:
 	if (blk_dev) {
-		if (blk_dev->data)
+		if (blk_dev->data) {
 			vfree(blk_dev->data);
-		kfree(blk_dev->tag_set);
-		if (blk_dev->disk)
+		}
+		if (blk_dev->tag_set) {
+			if (blk_dev->tag_set->tags)
+				blk_mq_free_tag_set(blk_dev->tag_set);
+			kfree(blk_dev->tag_set);
+		}
+		if (blk_dev->disk) {
 			put_disk(blk_dev->disk);
+		}
 		kfree(blk_dev);
 	}
 	if (dev_major > 0) {
@@ -461,6 +467,10 @@ static void __exit ex_blk_exit(void)
 			del_gendisk(blk_dev->disk);
 			blk_dev->disk_added = false;
 		}
+		if (blk_dev->disk) {
+			put_disk(blk_dev->disk);
+			blk_dev->disk = NULL;
+		}
 		if (blk_dev->tag_set) {
 			blk_mq_free_tag_set(blk_dev->tag_set);
 			kfree(blk_dev->tag_set);
@@ -469,10 +479,6 @@ static void __exit ex_blk_exit(void)
 		if (blk_dev->data) {
 			vfree(blk_dev->data);
 			blk_dev->data = NULL;
-		}
-		if (blk_dev->disk) {
-			put_disk(blk_dev->disk);
-			blk_dev->disk = NULL;
 		}
 		kfree(blk_dev);
 		blk_dev = NULL;
