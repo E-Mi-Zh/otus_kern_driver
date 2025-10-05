@@ -39,9 +39,7 @@ format:
 format-python:
 	$(PYTHON_FORMAT_TOOL) $(PYTHON_FORMAT_FILES)
 
-check: check-blk
-
-check-blk:
+check:
 	$(TEST_SCRIPT) blk $(BLK_MODULE)
 
 install: all
@@ -56,22 +54,22 @@ uninstall:
 	depmod -a
 	@echo "Modules uninstalled"
 
-load-blk:
+load:
 	insmod $(BUILD_DIR)/$(BLK_MODULE).ko
 	@echo "Module $(BLK_MODULE) loaded"
 
-unload-blk:
+unload:
 	rmmod $(BLK_MODULE) || true
 	@echo "Module $(BLK_MODULE) unloaded"
 
 help:
 	@echo "Available targets:"
-	@echo "  all              - Build the kernel module (default)"
-	@echo "  clean            - Clean build artifacts"
-	@echo "  format           - Format source code with clang-format"
-	@echo "  check            - Test all modules"
-	@echo "  check-blk        - Test blk module"
-	@echo "  install          - Install module to system"
-	@echo "  uninstall        - Remove module from system"
-	@echo "  load-blk         - Build and load blk module"
-	@echo "  unload-blk       - Unload blk module"
+	@echo "  all            - Build the kernel module (default)"
+	@echo "  clean          - Clean build artifacts"
+	@echo "  format         - Format source code with clang-format"
+	@echo "  format-python  - Format Python source code with black"
+	@echo "  check          - Test module"
+	@echo "  install        - Install module to system"
+	@echo "  uninstall      - Remove module from system"
+	@echo "  load           - Load module"
+	@echo "  unload         - Unload module"
