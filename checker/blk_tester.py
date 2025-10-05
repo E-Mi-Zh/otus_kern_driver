@@ -17,6 +17,8 @@ class ExBlkTester(BaseModuleTester):
             3 * 100 * 1024 * 1024
         ) + 512  # 300MB total for partitions + 512 bytes for MBR
         self.partition_size = 100 * 1024 * 1024  # 100MB per partition
+        self.proc_file = f"/proc/{self.device_name}/capacity"
+        self.sysfs_file = f"/sys/class/{self.device_name}/{self.device_name}/capacity"
 
     def cleanup_device(self):
         """Clean up any existing device mappings"""
@@ -39,6 +41,12 @@ class ExBlkTester(BaseModuleTester):
         print("\n=== Module Lifecycle Tests ===")
         self.clear_dmesg()
 
+        # Check if proc and sysfs files exist before module load (should not)
+        if os.path.exists(self.proc_file):
+            print("WARNING: Proc file exists before module load")
+        if os.path.exists(self.sysfs_file):
+            print("WARNING: Sysfs file exists before module load")
+
         # Load module
         self.load_module()
         success = self.assert_dmesg_contains(
@@ -57,6 +65,14 @@ class ExBlkTester(BaseModuleTester):
             part_device = f"{self.block_device}{i}"
             self.assert_file_exists(part_device, f"Partition device {part_device}")
 
+        # Check if proc file was created
+        success = self.assert_file_exists(self.proc_file, "Proc file creation")
+        if not success:
+            return False
+
+        # Check if sysfs file was created
+        self.assert_file_exists(self.sysfs_file, "Sysfs file creation")
+
         # Unload module
         self.unload_module()
         success = self.assert_dmesg_contains(
@@ -64,6 +80,64 @@ class ExBlkTester(BaseModuleTester):
         )
 
         return success
+
+    def test_proc_sysfs_operations(self):
+        """Test /proc and /sys filesystem operations"""
+        print("\n=== /proc and /sys Filesystem Tests ===")
+        self.clear_dmesg()
+        self.load_module()
+        time.sleep(0.5)
+
+        # Test proc file read
+        success, output = self.assert_command_success(
+            f"sudo cat {self.proc_file}",
+            "Read from proc file"
+        )
+        if success:
+            expected_content = "Capacity:"
+            if expected_content in output:
+                print("Additional check: Proc file content verified")
+            else:
+                print(f"Additional check: Proc file content unexpected: {output}")
+
+        # Test proc file write
+        test_content = "Test write to proc file"
+        success, output = self.assert_command_success(
+            f"echo '{test_content}' | sudo tee {self.proc_file}",
+            "Write to proc file"
+        )
+        # Check if write was successful in dmesg
+        success = self.assert_dmesg_contains(
+            "Written to proc file",
+            "Verify proc file write in dmesg"
+        )
+
+        # Test sysfs file read
+        success, output = self.assert_command_success(
+            f"sudo cat {self.sysfs_file}",
+            "Read from sysfs file"
+        )
+        if success:
+            expected_content = "Capacity:"
+            if expected_content in output:
+                print("Additional check: Sysfs file content verified")
+            else:
+                print(f"Additional check: Sysfs file content unexpected: {output}")
+
+        # Test sysfs file write
+        test_content = "Test write to sysfs file"
+        success, output = self.assert_command_success(
+            f"echo '{test_content}' | sudo tee {self.sysfs_file}",
+            "Write to sysfs file"
+        )
+        # Check if write was successful in dmesg
+        success = self.assert_dmesg_contains(
+            "Written to sysfs file",
+            "Verify sysfs file write in dmesg"
+        )
+
+        self.unload_module()
+        return True
 
     def test_block_device_creation(self):
         """Test that block device and partitions are properly created"""
@@ -509,6 +583,7 @@ class ExBlkTester(BaseModuleTester):
             # Run test suites
             self.test_module_lifecycle()
             self.test_block_device_creation()
+            self.test_proc_sysfs_operations()
             self.test_ioctl_commands()
             self.test_read_write_operations()
             self.test_partition_operations()

@@ -40,7 +40,7 @@ format-python:
 	$(PYTHON_FORMAT_TOOL) $(PYTHON_FORMAT_FILES)
 
 check:
-	$(TEST_SCRIPT) blk $(BLK_MODULE)
+	$(TEST_SCRIPT) ex_blk
 
 install: all
 	@echo "Installing module to /lib/modules/$(shell uname -r)/extra/src"
